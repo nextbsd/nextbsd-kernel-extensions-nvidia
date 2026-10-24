@@ -13,9 +13,12 @@ decision D3, and nextbsd/nextbsd#547.
 ## Build chain
 
 ```
-nextbsd-kernel  ──kernel-updated──▶  nextbsd-kernel-extensions  ──graphics-updated──▶  this repo
- (kernel obj)                          (graphics-kexts-amd64.tar.gz)                    (nvidia-kexts-amd64.tar.gz)
+nextbsd-kernel ──▶ nextbsd-kernel-extensions ··· (run by hand) ···▶ this repo
+ (kernel obj)       (graphics-kexts-amd64.tar.gz)                     (nvidia-kexts-amd64.tar.gz)
 ```
+
+Nothing upstream starts this build automatically (for now). After nextbsd-kernel-extensions publishes new graphics
+kexts, run this repo's workflow by hand.
 
 `nvidia-drm` is built against drm-kmod and checks the DRM API in the built `drm.ko`. This repo does not rebuild
 drm-kmod. It takes `drm.ko` and `dmabuf.ko` out of the graphics kexts that nextbsd-kernel-extensions published
@@ -25,7 +28,6 @@ same commit, so the drm-kmod headers always match the `drm.ko`. At runtime `NVID
 
 ## Triggers
 
-- `repository_dispatch: graphics-updated`, sent by nextbsd-kernel-extensions after it publishes its graphics kexts;
 - `push` to `main` touching the workflow or `tools/`;
 - `pull_request` (build only, never publishes);
 - `workflow_dispatch`.

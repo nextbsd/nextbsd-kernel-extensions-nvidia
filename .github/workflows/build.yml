@@ -1,11 +1,9 @@
 name: Build NextBSD NVIDIA Kernel Extensions
 on:
-  # Sent by nextbsd-kernel-extensions after it publishes its graphics kexts
-  # (graphics-kexts-amd64.tar.gz): the NVIDIA build links nvidia-drm against
-  # the drm.ko inside that release, so it runs after it, never alongside it.
-  # The chain is kernel -> graphics -> NVIDIA (E21 plan, steps N1-N2).
-  repository_dispatch:
-    types: [graphics-updated]
+  # No repository_dispatch for now (maintainer decision): nothing upstream
+  # starts this build automatically. Run it by hand (workflow_dispatch) after
+  # nextbsd-kernel-extensions publishes new graphics kexts; it links nvidia-drm
+  # against the drm.ko in the graphics-kexts-amd64.tar.gz published at that time.
   push:
     branches: [main]
     paths:
@@ -337,8 +335,8 @@ jobs:
   publish:
     name: publish continuous
     needs: nvidia-build
-    # Never on pull requests: only main pushes, the graphics-updated dispatch
-    # and manual runs on main refresh `continuous`.
+    # Never on pull requests: only main pushes and manual runs on main refresh
+    # `continuous`.
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -370,8 +368,8 @@ jobs:
           tag_name: continuous
           name: Continuous NVIDIA kexts build (amd64)
           body: |
-            Rolling NVIDIA kext build, refreshed on every successful `main` build and
-            after each graphics kexts publish in nextbsd-kernel-extensions.
+            Rolling NVIDIA kext build, refreshed on every successful `main` build and on
+            manual runs (after nextbsd-kernel-extensions publishes new graphics kexts).
 
             `nvidia-kexts-amd64.tar.gz`: the chained NVIDIAGraphics595 / NVIDIAModeset595 /
             NVIDIACore595 kexts (with GSP firmware) plus the NVIDIA595.bundle userland,
