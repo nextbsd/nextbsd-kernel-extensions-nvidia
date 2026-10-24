@@ -1,0 +1,391 @@
+name: Build NextBSD NVIDIA Kernel Extensions
+on:
+  # Sent by nextbsd-kernel-extensions after it publishes its graphics kexts
+  # (graphics-kexts-amd64.tar.gz): the NVIDIA build links nvidia-drm against
+  # the drm.ko inside that release, so it runs after it, never alongside it.
+  # The chain is kernel -> graphics -> NVIDIA (E21 plan, steps N1-N2).
+  repository_dispatch:
+    types: [graphics-updated]
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build.yml'
+      - 'tools/**'
+  pull_request:
+    paths:
+      - '.github/workflows/build.yml'
+      - 'tools/**'
+  workflow_dispatch:
+    inputs:
+      fbsd_sha:
+        description: 'Pinned FreeBSD SHA for the toolchain image tag (blank = latest)'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # NVIDIA's FreeBSD driver is amd64-only (a prebuilt x86_64 nv-kernel blob),
+  # so this repo builds and publishes amd64 only. There is no arm64 job and no
+  # arm64 asset, and the asset name carries the arch.
+  #
+  # Moved unchanged from nextbsd-kernel-extensions' `nvidia-build` job
+  # (nextbsd/nextbsd#384, #385, #388), except where drm.ko comes from: there it
+  # came from the drm-kmod job in the same run; here it comes from the graphics
+  # kexts that repo published.
+  nvidia-build:
+    name: nvidia build (nvidia/nvidia-modeset/nvidia-drm, amd64)
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/nextbsd/nextbsd-kernel-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
+    env:
+      NVIDIA_DISTVERSION: "595.84"
+      PORTS_FILES: "https://raw.githubusercontent.com/freebsd/freebsd-ports/main/x11/nvidia-driver/files"
+      GRAPHICS_REPO: nextbsd/nextbsd-kernel-extensions
+    steps:
+      - name: Download kernel obj tree from kernel continuous release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /usr/obj
+          gh release download continuous \
+            --repo nextbsd/nextbsd-kernel \
+            --pattern "kernel-obj-amd64.tar.gz" \
+            --output /tmp/kernel-obj.tar.gz --clobber
+          tar -C /usr/obj -xzf /tmp/kernel-obj.tar.gz
+          echo "KERNEL_COMMIT=$(gh release view continuous --repo nextbsd/nextbsd-kernel --json targetCommitish --jq .targetCommitish)" >> "$GITHUB_ENV"
+
+      - name: Apply patches to source
+        run: |
+          cd /usr/src
+          git clone --depth 1 https://github.com/nextbsd/nextbsd-kernel.git /tmp/nk
+          for p in $(cat /tmp/nk/patches/series); do
+            echo "Applying $p"
+            git apply /tmp/nk/patches/$p
+          done
+          cp /tmp/nk/config/NEXTBSD /usr/src/sys/amd64/conf/
+
+      - name: Checkout tools
+        uses: actions/checkout@v4
+        with:
+          path: nbkm-tools
+
+      # nvidia-drm must be built against the same drm-kmod release the published
+      # drm.ko was built from. Read DRM_KMOD_REF from the graphics repo's workflow
+      # at the commit its `continuous` release was built from, rather than keeping
+      # a second copy here that could drift.
+      - name: Download the published graphics kexts and their drm-kmod ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          GCOMMIT=$(gh release view continuous --repo "$GRAPHICS_REPO" --json targetCommitish --jq .targetCommitish)
+          [ -n "$GCOMMIT" ] || { echo "FAIL: no continuous release on $GRAPHICS_REPO" >&2; exit 1; }
+          gh release download continuous --repo "$GRAPHICS_REPO" \
+            --pattern 'graphics-kexts-amd64.tar.gz' --output /tmp/graphics-kexts.tar.gz --clobber
+          REF=$(gh api "repos/$GRAPHICS_REPO/contents/.github/workflows/build.yml?ref=$GCOMMIT" --jq .content \
+                | base64 -d | sed -n 's/^  DRM_KMOD_REF: *\([^ #]*\).*/\1/p' | head -1)
+          [ -n "$REF" ] || { echo "FAIL: DRM_KMOD_REF not found in $GRAPHICS_REPO@$GCOMMIT" >&2; exit 1; }
+          echo "graphics kexts from $GRAPHICS_REPO@$GCOMMIT, drm-kmod $REF"
+          echo "GRAPHICS_COMMIT=$GCOMMIT" >> "$GITHUB_ENV"
+          echo "DRM_KMOD_REF=$REF" >> "$GITHUB_ENV"
+
+      # NVIDIA's conftest.sh (src/nvidia-drm/conftest.sh) looks for exactly
+      # linuxkpi.ko, linuxkpi_gplv2.ko, drm.ko and dmabuf.ko by file name in
+      # CONFTEST_BSD_KMODPATHS and nm's them for the DRM API. LinuxKPI is compiled
+      # into the NextBSD kernel, so only drm.ko and dmabuf.ko are needed. Our kexts
+      # wrap the unmodified .ko renamed after the kext (IOGraphics.kext ->
+      # Contents/MacOS/IOGraphics), so restore the module names, matching the
+      # kexts by bundle identifier.
+      - name: Restore drm.ko and dmabuf.ko from the graphics kexts
+        run: |
+          set -eu
+          mkdir -p /tmp/gk /tmp/drm-ko
+          tar -C /tmp/gk -xzf /tmp/graphics-kexts.tar.gz
+          python3 - /tmp/gk /tmp/drm-ko <<'PY'
+          import os, plistlib, shutil, sys
+          src, dst = sys.argv[1], sys.argv[2]
+          want = {'org.nextbsd.kext.iographics': 'drm.ko', 'org.nextbsd.kext.dmabuf': 'dmabuf.ko'}
+          found = {}
+          for k in sorted(os.listdir(src)):
+              p = os.path.join(src, k, 'Contents', 'Info.plist')
+              if not k.endswith('.kext') or not os.path.isfile(p):
+                  continue
+              info = plistlib.load(open(p, 'rb'))
+              bid = info.get('CFBundleIdentifier')
+              if bid in want:
+                  exe = os.path.join(src, k, 'Contents', 'MacOS', info['CFBundleExecutable'])
+                  shutil.copy(exe, os.path.join(dst, want[bid]))
+                  found[bid] = k
+                  print(f"{k} ({bid}) -> {want[bid]}")
+          missing = sorted(set(want) - set(found))
+          if missing:
+              sys.exit(f"FAIL: graphics kexts lack {missing}")
+          PY
+          ls -l /tmp/drm-ko
+
+      - name: Fetch + patch NVIDIA source (SUB_PATCHES + port REINPLACE edits)
+        run: |
+          set -eu
+          V="${NVIDIA_DISTVERSION}"
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${V}"
+          mkdir -p /tmp/nvw
+          curl -fLo /tmp/nvidia.tar.xz \
+            "https://download.nvidia.com/XFree86/FreeBSD-x86_64/${V}/NVIDIA-FreeBSD-x86_64-${V}.tar.xz"
+          tar -C /tmp/nvw -xJf /tmp/nvidia.tar.xz
+          # SUB_PATCHES that pass the NVVERSION guards at 595.084 (Makefile,
+          # nv-freebsd.h, Makefile-2 >=580, gsp firmware-registry >=565). Only
+          # token is %%NVSRC%% -> nvidia; unified diffs are src/-prefixed => -p0.
+          for p in extra-patch-src-Makefile extra-patch-src-nv-freebsd.h \
+                   extra-patch-src-Makefile-2 \
+                   extra-gsp-patch-src-common-inc-nv_firmware_registry.h ; do
+            curl -fsSL "${PORTS_FILES}/${p}.in" | sed 's/%%NVSRC%%/nvidia/g' > "/tmp/${p}"
+            echo "applying SUB_PATCH ${p}"
+            patch --forward -E -p0 -d "${WRKSRC}" < "/tmp/${p}"
+          done
+          # drm-kmod source = DRMKMODDIR for nvidia-drm (headers/.mk only), at the
+          # same ref the published drm.ko was built from (previous step).
+          git clone --depth 1 --branch "${DRM_KMOD_REF}" \
+            https://github.com/freebsd/drm-kmod.git /tmp/drm-kmod
+          # post-patch REINPLACE edits: nvidia-kmod core + nvidia-drm (NVPP_DRM=1
+          # adds the fbdev/const-cast/pm_vt_switch/dummy-include edits from
+          # graphics/nvidia-drm-kmod/Makefile.common).
+          chmod +x nbkm-tools/tools/nvidia-portpatch.sh
+          NVPP_DRM=1 nbkm-tools/tools/nvidia-portpatch.sh "${WRKSRC}" nvidia
+
+      - name: Build nvidia.ko + nvidia-modeset.ko against the kernel obj
+        run: |
+          NPROC=$(nproc)
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C ${WRKSRC} -j${NPROC} SYSDIR=/usr/src/sys"
+
+      - name: Build nvidia-drm.ko against the kernel obj + drm-kmod source
+        run: |
+          NPROC=$(nproc)
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          cd /usr/src
+          # CONFTEST_BSD_KMODPATHS is conftest.sh's documented override for
+          # `sysctl kern.module_path`, which can't work on this Linux host (#384).
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="env CONFTEST_BSD_KMODPATHS=/tmp/drm-ko make -C ${WRKSRC}/src/nvidia-drm -j${NPROC} SYSDIR=/usr/src/sys DRMKMODDIR=/tmp/drm-kmod/"
+
+      - name: Collect + gate the NVIDIA .ko output
+        run: |
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          mkdir -p /tmp/nv-ko
+          find "${WRKSRC}" "${MAKEOBJDIRPREFIX:-/usr/obj}" -name '*.ko' 2>/dev/null \
+            -exec cp -v {} /tmp/nv-ko/ \; || true
+          echo "=== collected .ko files ==="
+          ls -lh /tmp/nv-ko || true
+          for ko in nvidia nvidia-modeset nvidia-drm; do
+            test -f "/tmp/nv-ko/${ko}.ko" || { echo "FAIL: required ${ko}.ko not built" >&2; exit 1; }
+            echo "  OK ${ko}.ko"
+          done
+
+      # Wrap the three .ko's into the chained NVIDIAGraphics595 kext (#385): one
+      # kext per .ko, OSBundleLibraries-chained like IntelGraphics->IOGraphics.
+      # NVIDIAGraphics595 (nvidia-drm, the load target) -> NVIDIAModeset595 ->
+      # NVIDIACore595, and -> IOGraphics (drmn, from the graphics package).
+      - name: Wrap the chained NVIDIAGraphics595 kexts
+        run: |
+          set -eu
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          T=nbkm-tools/tools
+          chmod +x "$T"/ko2kext.sh "$T"/gen-nvidia-personalities.sh
+          O=nvidia-kexts; mkdir -p "$O" pers
+          "$T/gen-nvidia-personalities.sh" \
+            "$WRKSRC/doc/supported-gpus/supported-gpus.json" \
+            org.nextbsd.driver.nvidiagraphics595 NVIDIAGraphics595 \
+            > pers/NVIDIAGraphics595.iokitpersonalities
+          "$T/ko2kext.sh" -o "$O" /tmp/nv-ko/nvidia.ko NVIDIACore595 org.nextbsd.driver.nvidiacore595
+          "$T/ko2kext.sh" -o "$O" -l org.nextbsd.driver.nvidiacore595 \
+            /tmp/nv-ko/nvidia-modeset.ko NVIDIAModeset595 org.nextbsd.driver.nvidiamodeset595
+          "$T/ko2kext.sh" -o "$O" \
+            -l org.nextbsd.driver.nvidiamodeset595 -l org.nextbsd.kext.iographics \
+            -p pers/NVIDIAGraphics595.iokitpersonalities \
+            -f "$WRKSRC/firmware/gsp_tu10x/gsp_tu10x.bin" \
+            -f "$WRKSRC/firmware/gsp_ga10x/gsp_ga10x.bin" \
+            /tmp/nv-ko/nvidia-drm.ko NVIDIAGraphics595 org.nextbsd.driver.nvidiagraphics595
+          echo "=== wrapped kexts ==="
+          for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d"|cut -f1))"; done
+
+      # Mesa's libgbm.so.1 loader, shipped inside the bundle so the NVIDIA package
+      # never depends on mesa-libs -> llvm19 (nextbsd/nextbsd#388; see the long WHY
+      # in nvidia-mkbundle.sh). Build-time only.
+      - name: Fetch Mesa's libgbm.so.1 loader (build-time only, no mesa/LLVM runtime dep)
+        run: |
+          set -eu
+          if ! command -v zstd >/dev/null 2>&1; then
+            apt-get update -qq && apt-get install -y -qq --no-install-recommends zstd
+          fi
+          REPO="https://pkg.FreeBSD.org/FreeBSD:15:amd64/latest"
+          W=/tmp/gbm; rm -rf "$W"; mkdir -p "$W"
+          curl -fsSL -o "$W/packagesite.pkg" "$REPO/packagesite.pkg"
+          zstd -dc "$W/packagesite.pkg" | tar -xf - -C "$W" packagesite.yaml
+          REPOPATH=$(grep -m1 '"name":"mesa-libs"' "$W/packagesite.yaml" \
+                     | sed -n 's/.*"repopath":"\([^"]*\)".*/\1/p')
+          [ -n "$REPOPATH" ] || { echo "FAIL: mesa-libs absent from the repo catalogue" >&2; exit 1; }
+          echo "  mesa-libs -> $REPOPATH"
+          curl -fsSL -o "$W/mesa-libs.pkg" "$REPO/$REPOPATH"
+          zstd -dc "$W/mesa-libs.pkg" | tar -xf - -C "$W" 2>/dev/null || true
+          GBM=$(find "$W" -name 'libgbm.so.1*' -type f | head -1)
+          [ -n "$GBM" ] || { echo "FAIL: libgbm.so.1 not in the mesa-libs package" >&2; exit 1; }
+          echo "  found $GBM ($(du -h "$GBM" | cut -f1))"
+          readelf -d "$GBM" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/    NEEDED \1/p'
+          if readelf -d "$GBM" | grep -qE 'NEEDED.*(gallium|LLVM)'; then
+            echo "FAIL: this Mesa's libgbm NEEDs gallium/LLVM — bundling it would reintroduce" >&2
+            echo "  the llvm19 dependency. Do not bundle; see nextbsd/nextbsd#388." >&2
+            exit 1
+          fi
+          echo "NVBUNDLE_LIBGBM=$GBM" >> "$GITHUB_ENV"
+
+      # Userland half: NVIDIA's precompiled X11/GL/EGL/GBM userland from the same
+      # tarball, staged into a version-locked sibling NVIDIA595.bundle next to the
+      # kexts (nextbsd-pkg runs the bundle's nvidia-activate.sh).
+      - name: Stage the NVIDIA595 userland bundle (sibling to the kexts)
+        run: |
+          set -eu
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          chmod +x nbkm-tools/tools/nvidia-mkbundle.sh nbkm-tools/tools/nvidia-activate.sh
+          nbkm-tools/tools/nvidia-mkbundle.sh "$WRKSRC" "${NVIDIA_DISTVERSION}" nvidia-kexts
+          B=nvidia-kexts/NVIDIA595.bundle
+          for f in Contents/Info.plist \
+                   Contents/Resources/xorg/drivers/nvidia_drv.so \
+                   Contents/Resources/xorg/extensions/libglxserver_nvidia.so.1 \
+                   Contents/Resources/lib/libGLX_nvidia.so.0 \
+                   Contents/Resources/lib/libnvidia-glcore.so.1 \
+                   Contents/Resources/lib/libnvidia-egl-gbm.so.1 \
+                   Contents/Resources/lib/libgbm.so.1 \
+                   Contents/Resources/lib/gbm/nvidia-drm_gbm.so \
+                   Contents/Resources/share/glvnd/egl_vendor.d/10_nvidia.json \
+                   Contents/Resources/etc/libmap.d/nvidia.conf \
+                   Contents/Resources/nvidia-activate.sh; do
+            test -e "$B/$f" || { echo "FAIL: NVIDIA595.bundle missing $f" >&2; exit 1; }
+          done
+          test -f "$B/Contents/Resources/lib/gbm/nvidia-drm_gbm.so" \
+            || { echo "FAIL: gbm backend symlink dangling" >&2; exit 1; }
+          for f in "$B"/Contents/Resources/lib/*.so.* "$B"/Contents/Resources/xorg/drivers/*.so; do
+            [ -f "$f" ] || continue
+            for n in $(readelf -d "$f" 2>/dev/null | sed -n 's/.*NEEDED.*\[\(lib[^]]*\)\].*/\1/p'); do
+              case "$n" in
+                libgbm.so.*) test -f "$B/Contents/Resources/lib/$n" \
+                  || { echo "FAIL: $(basename "$f") NEEDs $n, not in bundle -> pkg would dep on mesa-libs -> llvm19" >&2; exit 1; } ;;
+                *gallium*|*LLVM*) echo "FAIL: $(basename "$f") NEEDs $n — LLVM must not enter the bundle" >&2; exit 1 ;;
+              esac
+            done
+          done
+          echo "  bundle NEEDs no mesa-libs / llvm19 (nextbsd#388)"
+          for d in nvidia-kexts/*.kext nvidia-kexts/*.bundle; do
+            [ -e "$d" ] && echo "  $(basename "$d") ($(du -sh "$d"|cut -f1))"
+          done
+
+      - name: Validate the NVIDIA kext bundles
+        run: |
+          python3 - nvidia-kexts <<'PY'
+          import plistlib, sys, os
+          O = sys.argv[1]
+          def info(n): return plistlib.load(open(f"{O}/{n}.kext/Contents/Info.plist","rb"))
+          chain = {
+            'NVIDIACore595':     ('org.nextbsd.driver.nvidiacore595', []),
+            'NVIDIAModeset595':  ('org.nextbsd.driver.nvidiamodeset595', ['org.nextbsd.driver.nvidiacore595']),
+            'NVIDIAGraphics595': ('org.nextbsd.driver.nvidiagraphics595',
+                                  ['org.nextbsd.driver.nvidiamodeset595','org.nextbsd.kext.iographics']),
+          }
+          for name,(bid,deps) in chain.items():
+              d = info(name)
+              assert d['CFBundleIdentifier'] == bid, (name, d['CFBundleIdentifier'])
+              libs = d.get('OSBundleLibraries', {})
+              for dep in deps: assert dep in libs, (name, 'missing OSBundleLibraries dep', dep)
+              print(f"{name}: id ok, deps {sorted(libs)}")
+          g = info('NVIDIAGraphics595')
+          p = g['IOKitPersonalities']['NVIDIAGraphics595']
+          ids = p['IOPCIPrimaryMatch'].split()
+          assert ids and all(x.startswith('0x') and x.endswith('10de') and len(x)==10 for x in ids), ids[:3]
+          fw = sorted(os.listdir(f"{O}/NVIDIAGraphics595.kext/Contents/Resources/firmware"))
+          assert fw == ['gsp_ga10x.bin','gsp_tu10x.bin'], fw
+          print(f"NVIDIAGraphics595: {len(ids)} Turing+ ids (0x10de), firmware {fw}")
+          print("NVIDIA kext bundles OK (chain + personalities + firmware)")
+          PY
+
+      - name: Record what this build was built against
+        run: |
+          cat > nvidia-kexts/BUILD-INFO <<EOF
+          nvidia_version=${NVIDIA_DISTVERSION}
+          kernel_commit=${KERNEL_COMMIT}
+          graphics_repo=${GRAPHICS_REPO}
+          graphics_commit=${GRAPHICS_COMMIT}
+          drm_kmod_ref=${DRM_KMOD_REF}
+          EOF
+          sed -i 's/^ *//' nvidia-kexts/BUILD-INFO
+          cat nvidia-kexts/BUILD-INFO
+
+      - name: Upload NVIDIA kexts artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-kexts-amd64
+          path: nvidia-kexts
+          if-no-files-found: error
+
+  publish:
+    name: publish continuous
+    needs: nvidia-build
+    # Never on pull requests: only main pushes, the graphics-updated dispatch
+    # and manual runs on main refresh `continuous`.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download the NVIDIA kexts artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nvidia-kexts-amd64
+          path: nvidia-kexts
+
+      - name: Package the amd64 asset
+        run: |
+          set -eu
+          test -d nvidia-kexts/NVIDIAGraphics595.kext || { echo "FAIL: no NVIDIA kexts to publish" >&2; exit 1; }
+          mkdir -p out
+          tar -C nvidia-kexts -czf out/nvidia-kexts-amd64.tar.gz .
+          echo "==> nvidia-kexts-amd64.tar.gz: $(du -sh out/nvidia-kexts-amd64.tar.gz | cut -f1)"
+          {
+            echo "BUILD_INFO<<EOF"
+            cat nvidia-kexts/BUILD-INFO
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      # Stable asset name, so each publish overwrites in place.
+      - name: Publish to continuous release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: continuous
+          name: Continuous NVIDIA kexts build (amd64)
+          body: |
+            Rolling NVIDIA kext build, refreshed on every successful `main` build and
+            after each graphics kexts publish in nextbsd-kernel-extensions.
+
+            `nvidia-kexts-amd64.tar.gz`: the chained NVIDIAGraphics595 / NVIDIAModeset595 /
+            NVIDIACore595 kexts (with GSP firmware) plus the NVIDIA595.bundle userland,
+            installed into /System/Library/Extensions. amd64 only.
+
+            Built against:
+            ```
+            ${{ env.BUILD_INFO }}
+            ```
+
+            Build log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Commit: ${{ github.sha }}
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          files: |
+            out/nvidia-kexts-amd64.tar.gz
