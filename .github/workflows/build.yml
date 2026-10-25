@@ -37,7 +37,7 @@ jobs:
     name: nvidia build (nvidia/nvidia-modeset/nvidia-drm, amd64)
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/nextbsd/nextbsd-kernel-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
+      image: ghcr.io/nextbsd/nextbsd-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     env:
       NVIDIA_DISTVERSION: "595.84"
       PORTS_FILES: "https://raw.githubusercontent.com/freebsd/freebsd-ports/main/x11/nvidia-driver/files"
