@@ -30,7 +30,7 @@
 # libgbm.so.1 is not in the bundle any more: NextBSD-mesa provides it in
 # /usr/X11/lib (nextbsd-kernel-extensions-nvidia#2). Mesa's libgbm and these links
 # share no file path, so pkg has no file conflict to settle by deinstalling
-# NextBSD-kernel-extensions (nextbsd-kernel-extensions#27).
+# NextBSD-kernel-extensions (nextbsd-kernel-extensions-graphics#27).
 #
 # The symlink TARGETS are the bundle's absolute final install path (arg 1), so they
 # resolve after install regardless of any staging prefix (arg 2). Portable POSIX sh.
@@ -60,7 +60,7 @@ link_dir() {
 		[ -d "$_f" ] && [ ! -L "$_f" ] && continue
 		# Never link a libgbm: /usr/X11/lib/libgbm.so{,.1} belong to NextBSD-mesa,
 		# and a second owner of that path is the file conflict pkg once settled by
-		# deinstalling this whole package (nextbsd-kernel-extensions#27). Current
+		# deinstalling this whole package (nextbsd-kernel-extensions-graphics#27). Current
 		# bundles carry none; this keeps an older bundle from shadowing Mesa's.
 		case "$(basename "$_f")" in
 		libgbm.so|libgbm.so.*) continue ;;

@@ -13,15 +13,15 @@ decision D3, and nextbsd/nextbsd#547.
 ## Build chain
 
 ```
-nextbsd-kernel ──▶ nextbsd-kernel-extensions ··· (run by hand) ···▶ this repo
+nextbsd-kernel ──▶ nextbsd-kernel-extensions-graphics ··· (run by hand) ···▶ this repo
  (kernel obj)       (graphics-kexts-amd64.tar.gz)                     (nvidia-kexts-amd64.tar.gz)
 ```
 
-Nothing upstream starts this build automatically (for now). After nextbsd-kernel-extensions publishes new graphics
+Nothing upstream starts this build automatically (for now). After nextbsd-kernel-extensions-graphics publishes new graphics
 kexts, run this repo's workflow by hand.
 
 `nvidia-drm` is built against drm-kmod and checks the DRM API in the built `drm.ko`. This repo does not rebuild
-drm-kmod. It takes `drm.ko` and `dmabuf.ko` out of the graphics kexts that nextbsd-kernel-extensions published
+drm-kmod. It takes `drm.ko` and `dmabuf.ko` out of the graphics kexts that nextbsd-kernel-extensions-graphics published
 (`IOGraphics.kext` and `DMABuf.kext`, found by bundle identifier). It also reads that repo's `DRM_KMOD_REF` at the
 same commit, so the drm-kmod headers always match the `drm.ko`. At runtime `NVIDIAGraphics595` depends on
 `IOGraphics.kext` through `OSBundleLibraries`.
@@ -49,10 +49,10 @@ kexts first.
 
 ## Tools
 
-`tools/` holds the scripts this build uses, copied from nextbsd-kernel-extensions when the NVIDIA build moved here:
+`tools/` holds the scripts this build uses, copied from nextbsd-kernel-extensions-graphics when the NVIDIA build moved here:
 `ko2kext.sh`, `gen-nvidia-personalities.sh`, `nvidia-portpatch.sh`, `nvidia-mkbundle.sh` and `nvidia-activate.sh`.
-`nvidia-mkbundle.sh` and `nvidia-activate.sh` are at `04b714a` (nextbsd-kernel-extensions#98); the rest at `a35dc83`.
-`prepare-kernel-src.sh` and `stamp-kernel-build-id.py` are shared with nextbsd-kernel-extensions (#99, #100).
+`nvidia-mkbundle.sh` and `nvidia-activate.sh` are at `04b714a` (nextbsd-kernel-extensions-graphics#98); the rest at `a35dc83`.
+`prepare-kernel-src.sh` and `stamp-kernel-build-id.py` are shared with nextbsd-kernel-extensions-graphics (#99, #100).
 
 `patches/freebsd-ports/` holds the FreeBSD port's driver patches, pinned to one ports commit (see its README).
 

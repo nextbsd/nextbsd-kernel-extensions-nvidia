@@ -2,7 +2,7 @@ name: Build NextBSD NVIDIA Kernel Extensions
 on:
   # No repository_dispatch for now (maintainer decision): nothing upstream
   # starts this build automatically. Run it by hand (workflow_dispatch) after
-  # nextbsd-kernel-extensions publishes new graphics kexts; it links nvidia-drm
+  # nextbsd-kernel-extensions-graphics publishes new graphics kexts; it links nvidia-drm
   # against the drm.ko in the graphics-kexts-amd64.tar.gz published at that time.
   push:
     branches: [main]
@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   # Prove gen-nvidia-personalities.sh against fixtures (moved with the NVIDIA
-  # tools from nextbsd-kernel-extensions, nextbsd/nextbsd#548): the 595 match set
+  # tools from nextbsd-kernel-extensions-graphics, nextbsd/nextbsd#548): the 595 match set
   # is Turing+ only, -b picks exactly one legacy branch, and the sets are
   # disjoint. No driver build needed. PR-only; publish does not wait on it.
   personalities-selftest:
@@ -47,7 +47,7 @@ jobs:
   # so this repo builds and publishes amd64 only. There is no arm64 job and no
   # arm64 asset, and the asset name carries the arch.
   #
-  # Moved unchanged from nextbsd-kernel-extensions' `nvidia-build` job
+  # Moved unchanged from nextbsd-kernel-extensions-graphics' `nvidia-build` job
   # (nextbsd/nextbsd#384, #385, #388), except where drm.ko comes from: there it
   # came from the drm-kmod job in the same run; here it comes from the graphics
   # kexts that repo published.
@@ -58,7 +58,7 @@ jobs:
       image: ghcr.io/nextbsd/nextbsd-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     env:
       NVIDIA_DISTVERSION: "595.84"
-      GRAPHICS_REPO: nextbsd/nextbsd-kernel-extensions
+      GRAPHICS_REPO: nextbsd/nextbsd-kernel-extensions-graphics
     steps:
       - name: Checkout tools
         uses: actions/checkout@v4
@@ -134,7 +134,7 @@ jobs:
               info = plistlib.load(open(os.path.join(src, k, 'Contents', 'Info.plist'), 'rb'))
               gid = info.get('NBSDKernelBuildID')
               if gid is None:
-                  # Graphics kexts published before nextbsd-kernel-extensions#100.
+                  # Graphics kexts published before nextbsd-kernel-extensions-graphics#100.
                   print(f"::warning::{k} carries no NBSDKernelBuildID; cannot confirm it matches kernel {kid}")
               elif gid != kid:
                   sys.exit(f"FAIL: {k} was built for kernel {gid}, but kernel-obj is {kid}. "
@@ -404,7 +404,7 @@ jobs:
           name: Continuous NVIDIA kexts build (amd64)
           body: |
             Rolling NVIDIA kext build, refreshed on every successful `main` build and on
-            manual runs (after nextbsd-kernel-extensions publishes new graphics kexts).
+            manual runs (after nextbsd-kernel-extensions-graphics publishes new graphics kexts).
 
             `nvidia-kexts-amd64.tar.gz`: the chained NVIDIAGraphics595 / NVIDIAModeset595 /
             NVIDIACore595 kexts (with GSP firmware) plus the NVIDIA595.bundle userland,

@@ -74,7 +74,7 @@ ln -sf ../libnvidia-allocator.so.1 "$R/lib/gbm/nvidia-drm_gbm.so"
 # libnvidia-egl-gbm.so.1 (the EGL-on-GBM external platform) is the only bundle lib
 # that DT_NEEDs libgbm.so.1. The bundle used to carry a copy of FreeBSD mesa-libs'
 # loader so pkg(8) recorded it as shlibs_provided and added no mesa-libs -> llvm19
-# edge (nextbsd-kernel-extensions#26, nextbsd#388). NextBSD now ships its own Mesa
+# edge (nextbsd-kernel-extensions-graphics#26, nextbsd#388). NextBSD now ships its own Mesa
 # in base, NextBSD-mesa, with /usr/X11/lib/libgbm.so.1 and LLVM linked statically
 # (E23 D3), so the copy goes (E23 D15, nextbsd-kernel-extensions-nvidia#2):
 #   - nextbsd-pkg lists libgbm.so.1 in NextBSD-kernel-extensions'
@@ -87,7 +87,7 @@ ln -sf ../libnvidia-allocator.so.1 "$R/lib/gbm/nvidia-drm_gbm.so"
 #     -Dgbm-backends-path), which nvidia-activate.sh links there.
 #   - The only libgbm.so.1 on the system is NextBSD-mesa's, so there is no
 #     shared file path for pkg to "resolve" by deinstalling this package
-#     (nextbsd-kernel-extensions#27).
+#     (nextbsd-kernel-extensions-graphics#27).
 
 # --- closure self-check: every NVIDIA lib our own binaries NEED has to be here, and
 # --- libgbm must NOT be (that copy is exactly what was removed above) ---
