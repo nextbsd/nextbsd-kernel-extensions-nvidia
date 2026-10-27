@@ -2,7 +2,7 @@
 # personalities-selftest.sh — prove gen-nvidia-personalities.sh against a
 # synthetic supported-gpus.json on every PR, without building the driver.
 #
-# Moved unchanged from nextbsd-kernel-extensions' tests/personalities-selftest.sh
+# Moved unchanged from nextbsd-kernel-extensions-graphics' tests/personalities-selftest.sh
 # with the NVIDIA tools (nextbsd/nextbsd#548).
 set -eu
 
