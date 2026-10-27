@@ -10,11 +10,13 @@ on:
       - '.github/workflows/build.yml'
       - 'tools/**'
       - 'patches/**'
+      - 'tests/**'
   pull_request:
     paths:
       - '.github/workflows/build.yml'
       - 'tools/**'
       - 'patches/**'
+      - 'tests/**'
   workflow_dispatch:
     inputs:
       fbsd_sha:
@@ -27,6 +29,20 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Prove gen-nvidia-personalities.sh against fixtures (moved with the NVIDIA
+  # tools from nextbsd-kernel-extensions, nextbsd/nextbsd#548): the 595 match set
+  # is Turing+ only, -b picks exactly one legacy branch, and the sets are
+  # disjoint. No driver build needed. PR-only; publish does not wait on it.
+  personalities-selftest:
+    name: NVIDIA personalities self-test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout (tools/ + tests/)
+        uses: actions/checkout@v4
+      - name: Run the NVIDIA personality generator against fixtures
+        run: ./tests/personalities-selftest.sh
+
   # NVIDIA's FreeBSD driver is amd64-only (a prebuilt x86_64 nv-kernel blob),
   # so this repo builds and publishes amd64 only. There is no arm64 job and no
   # arm64 asset, and the asset name carries the arch.
