@@ -40,9 +40,22 @@ the NVIDIA version and the kernel, graphics and drm-kmod builds it was made agai
 
 ## Tools
 
-`tools/` holds the scripts this build uses, copied unchanged from nextbsd-kernel-extensions (`a35dc83`) when the
-NVIDIA build moved here: `ko2kext.sh`, `gen-nvidia-personalities.sh`, `nvidia-portpatch.sh`, `nvidia-mkbundle.sh`
-and `nvidia-activate.sh`.
+`tools/` holds the scripts this build uses, copied from nextbsd-kernel-extensions when the NVIDIA build moved here:
+`ko2kext.sh`, `gen-nvidia-personalities.sh`, `nvidia-portpatch.sh`, `nvidia-mkbundle.sh` and `nvidia-activate.sh`.
+`nvidia-mkbundle.sh` and `nvidia-activate.sh` are at `04b714a` (nextbsd-kernel-extensions#98); the rest at `a35dc83`.
+
+`patches/freebsd-ports/` holds the FreeBSD port's driver patches, pinned to one ports commit (see its README).
+
+## Userland bundle and Mesa
+
+`NVIDIA595.bundle` does not carry `libgbm.so.1`. NextBSD-mesa provides it in `/usr/X11/lib`, and nextbsd-pkg lists
+it in `shlibs_required_ignore`, so the NVIDIA package doesn't depend on Mesa. `nvidia-activate.sh` links the bundle
+into `/usr/X11` (the GBM backend into `/usr/X11/lib/gbm`, Mesa's backend path), and the EGL external-platform files
+into `/usr/share/egl/egl_external_platform.d`, the only place `libEGL_nvidia` looks. The build fails if the bundle
+carries a libgbm or NEEDs gallium or LLVM.
+
+The driver version must be 595.x: the kext and bundle names are fixed at 595, and the stored patches are for that
+branch.
 
 ## License
 

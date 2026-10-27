@@ -9,10 +9,12 @@ on:
     paths:
       - '.github/workflows/build.yml'
       - 'tools/**'
+      - 'patches/**'
   pull_request:
     paths:
       - '.github/workflows/build.yml'
       - 'tools/**'
+      - 'patches/**'
   workflow_dispatch:
     inputs:
       fbsd_sha:
@@ -40,7 +42,6 @@ jobs:
       image: ghcr.io/nextbsd/nextbsd-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     env:
       NVIDIA_DISTVERSION: "595.84"
-      PORTS_FILES: "https://raw.githubusercontent.com/freebsd/freebsd-ports/main/x11/nvidia-driver/files"
       GRAPHICS_REPO: nextbsd/nextbsd-kernel-extensions
     steps:
       - name: Download kernel obj tree from kernel continuous release
@@ -128,6 +129,14 @@ jobs:
         run: |
           set -eu
           V="${NVIDIA_DISTVERSION}"
+          # The kext and bundle names are fixed at 595 (NVIDIACore595 ...
+          # NVIDIA595.bundle) while the tarball follows NVIDIA_DISTVERSION, and the
+          # port patches in patches/freebsd-ports are the ones for the 595 branch.
+          # Another branch needs its own names and patches, not just a version bump.
+          case "$V" in
+          595.*) ;;
+          *) echo "FAIL: NVIDIA_DISTVERSION $V is not a 595.x driver; kext names and patches are 595-only" >&2; exit 1 ;;
+          esac
           WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${V}"
           mkdir -p /tmp/nvw
           curl -fLo /tmp/nvidia.tar.xz \
@@ -136,10 +145,13 @@ jobs:
           # SUB_PATCHES that pass the NVVERSION guards at 595.084 (Makefile,
           # nv-freebsd.h, Makefile-2 >=580, gsp firmware-registry >=565). Only
           # token is %%NVSRC%% -> nvidia; unified diffs are src/-prefixed => -p0.
+          # Stored in patches/freebsd-ports, pinned to the freebsd-ports commit
+          # recorded there, so a change on the port's main branch can't reach this
+          # build unreviewed.
           for p in extra-patch-src-Makefile extra-patch-src-nv-freebsd.h \
                    extra-patch-src-Makefile-2 \
                    extra-gsp-patch-src-common-inc-nv_firmware_registry.h ; do
-            curl -fsSL "${PORTS_FILES}/${p}.in" | sed 's/%%NVSRC%%/nvidia/g' > "/tmp/${p}"
+            sed 's/%%NVSRC%%/nvidia/g' "nbkm-tools/patches/freebsd-ports/${p}.in" > "/tmp/${p}"
             echo "applying SUB_PATCH ${p}"
             patch --forward -E -p0 -d "${WRKSRC}" < "/tmp/${p}"
           done
@@ -215,39 +227,11 @@ jobs:
           echo "=== wrapped kexts ==="
           for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d"|cut -f1))"; done
 
-      # Mesa's libgbm.so.1 loader, shipped inside the bundle so the NVIDIA package
-      # never depends on mesa-libs -> llvm19 (nextbsd/nextbsd#388; see the long WHY
-      # in nvidia-mkbundle.sh). Build-time only.
-      - name: Fetch Mesa's libgbm.so.1 loader (build-time only, no mesa/LLVM runtime dep)
-        run: |
-          set -eu
-          if ! command -v zstd >/dev/null 2>&1; then
-            apt-get update -qq && apt-get install -y -qq --no-install-recommends zstd
-          fi
-          REPO="https://pkg.FreeBSD.org/FreeBSD:15:amd64/latest"
-          W=/tmp/gbm; rm -rf "$W"; mkdir -p "$W"
-          curl -fsSL -o "$W/packagesite.pkg" "$REPO/packagesite.pkg"
-          zstd -dc "$W/packagesite.pkg" | tar -xf - -C "$W" packagesite.yaml
-          REPOPATH=$(grep -m1 '"name":"mesa-libs"' "$W/packagesite.yaml" \
-                     | sed -n 's/.*"repopath":"\([^"]*\)".*/\1/p')
-          [ -n "$REPOPATH" ] || { echo "FAIL: mesa-libs absent from the repo catalogue" >&2; exit 1; }
-          echo "  mesa-libs -> $REPOPATH"
-          curl -fsSL -o "$W/mesa-libs.pkg" "$REPO/$REPOPATH"
-          zstd -dc "$W/mesa-libs.pkg" | tar -xf - -C "$W" 2>/dev/null || true
-          GBM=$(find "$W" -name 'libgbm.so.1*' -type f | head -1)
-          [ -n "$GBM" ] || { echo "FAIL: libgbm.so.1 not in the mesa-libs package" >&2; exit 1; }
-          echo "  found $GBM ($(du -h "$GBM" | cut -f1))"
-          readelf -d "$GBM" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/    NEEDED \1/p'
-          if readelf -d "$GBM" | grep -qE 'NEEDED.*(gallium|LLVM)'; then
-            echo "FAIL: this Mesa's libgbm NEEDs gallium/LLVM — bundling it would reintroduce" >&2
-            echo "  the llvm19 dependency. Do not bundle; see nextbsd/nextbsd#388." >&2
-            exit 1
-          fi
-          echo "NVBUNDLE_LIBGBM=$GBM" >> "$GITHUB_ENV"
-
       # Userland half: NVIDIA's precompiled X11/GL/EGL/GBM userland from the same
       # tarball, staged into a version-locked sibling NVIDIA595.bundle next to the
-      # kexts (nextbsd-pkg runs the bundle's nvidia-activate.sh).
+      # kexts (nextbsd-pkg runs the bundle's nvidia-activate.sh, which links it into
+      # /usr/X11). libgbm.so.1 is not bundled: NextBSD-mesa provides it in
+      # /usr/X11/lib (nextbsd-kernel-extensions-nvidia#2).
       - name: Stage the NVIDIA595 userland bundle (sibling to the kexts)
         run: |
           set -eu
@@ -261,7 +245,6 @@ jobs:
                    Contents/Resources/lib/libGLX_nvidia.so.0 \
                    Contents/Resources/lib/libnvidia-glcore.so.1 \
                    Contents/Resources/lib/libnvidia-egl-gbm.so.1 \
-                   Contents/Resources/lib/libgbm.so.1 \
                    Contents/Resources/lib/gbm/nvidia-drm_gbm.so \
                    Contents/Resources/share/glvnd/egl_vendor.d/10_nvidia.json \
                    Contents/Resources/etc/libmap.d/nvidia.conf \
@@ -270,17 +253,21 @@ jobs:
           done
           test -f "$B/Contents/Resources/lib/gbm/nvidia-drm_gbm.so" \
             || { echo "FAIL: gbm backend symlink dangling" >&2; exit 1; }
+          # libgbm comes from NextBSD-mesa (/usr/X11/lib), never from the bundle,
+          # and nothing in the bundle may NEED LLVM or gallium (nextbsd#388).
+          for f in "$B"/Contents/Resources/lib/libgbm.so*; do
+            [ -e "$f" ] || [ -L "$f" ] || continue
+            echo "FAIL: NVIDIA595.bundle carries $(basename "$f"); NextBSD-mesa provides libgbm" >&2; exit 1
+          done
           for f in "$B"/Contents/Resources/lib/*.so.* "$B"/Contents/Resources/xorg/drivers/*.so; do
             [ -f "$f" ] || continue
             for n in $(readelf -d "$f" 2>/dev/null | sed -n 's/.*NEEDED.*\[\(lib[^]]*\)\].*/\1/p'); do
               case "$n" in
-                libgbm.so.*) test -f "$B/Contents/Resources/lib/$n" \
-                  || { echo "FAIL: $(basename "$f") NEEDs $n, not in bundle -> pkg would dep on mesa-libs -> llvm19" >&2; exit 1; } ;;
                 *gallium*|*LLVM*) echo "FAIL: $(basename "$f") NEEDs $n — LLVM must not enter the bundle" >&2; exit 1 ;;
               esac
             done
           done
-          echo "  bundle NEEDs no mesa-libs / llvm19 (nextbsd#388)"
+          echo "  bundle carries no libgbm and NEEDs no gallium/LLVM"
           for d in nvidia-kexts/*.kext nvidia-kexts/*.bundle; do
             [ -e "$d" ] && echo "  $(basename "$d") ($(du -sh "$d"|cut -f1))"
           done
