@@ -13,12 +13,14 @@ on:
     paths:
       - '.github/workflows/build.yml'
       - 'tools/**'
+      - 'data/**'
       - 'patches/**'
       - 'tests/**'
   pull_request:
     paths:
       - '.github/workflows/build.yml'
       - 'tools/**'
+      - 'data/**'
       - 'patches/**'
       - 'tests/**'
   workflow_dispatch:
@@ -341,6 +343,12 @@ jobs:
       # /System/Library/Extensions (nextbsd-kernel#326).
       - name: Stamp KERNEL-BUILD-ID into the NVIDIA kexts
         run: python3 nbkm-tools/tools/stamp-kernel-build-id.py "$KERNEL_BUILD_ID" nvidia-kexts
+
+      # OSBundleRequired by role, as Mac OS X 10.9 tags its kexts
+      # (nextbsd-kernel-extensions#4): the NVIDIA kexts are Safe Boot, like
+      # 10.9's NVDAStartup and NVDAResman.
+      - name: Tag OSBundleRequired by role
+        run: python3 nbkm-tools/tools/set-osbundlerequired.py nbkm-tools/data/osbundlerequired.tsv nvidia-kexts
 
       # Kept OUT of the kext tarball: it is unpacked straight into
       # /System/Library/Extensions, where a loose file would be installed.
