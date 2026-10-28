@@ -1,0 +1,9 @@
+# OSBundleRequired per NVIDIA kext (nextbsd-kernel-extensions#4), by role, as Mac OS X 10.9.5 tags its own:
+#   Safe Boot  the driver core and the parts that drive the display (10.9: NVDAStartup, NVDAResman,
+#              NVDAResmanTesla, NVDAGF100Hal, NVDAGK100Hal), and the libraries they load with
+#   (no key)   3D-only acceleration (10.9: GeForce, GeForceTesla); none of ours is 3D-only
+# tools/set-osbundlerequired.py applies this table; nothing reads the key yet (it is for a pre-root load path).
+kext	required
+NVIDIACore595	Safe Boot
+NVIDIAModeset595	Safe Boot
+NVIDIAGraphics595	Safe Boot
