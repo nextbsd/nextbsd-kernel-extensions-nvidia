@@ -42,11 +42,11 @@ is unpacked straight into `/System/Library/Extensions`. Each kext's `Info.plist`
 nextbsd-kernel build it was built for (nextbsd-kernel#326). `nvidia-kexts-amd64.BUILD-INFO`, a separate asset, records
 the NVIDIA version and the kernel, graphics and drm-kmod builds it was made against.
 
-## Kernel source and build ID
+## Kernel SDK and build ID
 
-`tools/prepare-kernel-src.sh` downloads the kernel's `kernel-obj-amd64` and prepares `/usr/src` with that same kernel
-commit's `ci/prepare-src.sh` (nextbsd-kernel#325), so the NVIDIA modules build from the kernel's own tree. The build
-fails if the published graphics kexts carry a different `NBSDKernelBuildID` than that kernel: rebuild the graphics
+`tools/fetch-kernel-sdk.sh` downloads the kernel SDK, `kernel-sdk-amd64.tar.gz` (nextbsd-kernel#327): the kernel's headers,
+generated options and `KERNEL-BUILD-ID`. The NVIDIA modules build with `SYSDIR` pointing into it, with no kernel source
+or obj tree and no kernel relink. The build fails if the published graphics kexts carry a different `NBSDKernelBuildID` than that kernel: rebuild the graphics
 kexts first.
 
 ## Tools
@@ -54,7 +54,7 @@ kexts first.
 `tools/` holds the scripts this build uses, copied from nextbsd-kernel-extensions-graphics when the NVIDIA build moved here:
 `ko2kext.sh`, `gen-nvidia-personalities.sh`, `nvidia-portpatch.sh`, `nvidia-mkbundle.sh` and `nvidia-activate.sh`.
 `nvidia-mkbundle.sh` and `nvidia-activate.sh` are at `04b714a` (nextbsd-kernel-extensions-graphics#98); the rest at `a35dc83`.
-`prepare-kernel-src.sh` and `stamp-kernel-build-id.py` are shared with nextbsd-kernel-extensions-graphics (#99, #100).
+`fetch-kernel-sdk.sh` and `stamp-kernel-build-id.py` are shared with nextbsd-kernel-extensions and -graphics.
 
 `patches/freebsd-ports/` holds the FreeBSD port's driver patches, pinned to one ports commit (see its README).
 

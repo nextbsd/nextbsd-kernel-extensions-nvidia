@@ -69,15 +69,27 @@ jobs:
         with:
           path: nbkm-tools
 
-      # The kernel obj tree from nextbsd-kernel's `continuous` release, and
-      # /usr/src prepared by that same commit's ci/prepare-src.sh, so the NVIDIA
-      # modules build from exactly the kernel's tree (nextbsd-kernel#325). Also
-      # exports KERNEL_COMMIT and KERNEL_BUILD_ID (nextbsd-kernel#326).
-      - name: Kernel obj tree + prepared source (same nextbsd-kernel commit)
+      # The kernel SDK from nextbsd-kernel's `continuous` release
+      # (nextbsd-kernel#327): the kernel's headers, generated options and
+      # KERNEL-BUILD-ID. No kernel source or obj tree, no relink
+      # (nextbsd-kernel-extensions#2). Exports KERNEL_SDK, KERNEL_COMMIT and
+      # KERNEL_BUILD_ID; the module builds below use SYSDIR=$KERNEL_SDK/sys.
+      - name: Kernel SDK
         env:
           GH_TOKEN: ${{ github.token }}
           DISPATCHED_SHA: ${{ github.event.client_payload.sha }}
-        run: nbkm-tools/tools/prepare-kernel-src.sh amd64 amd64
+        run: nbkm-tools/tools/fetch-kernel-sdk.sh amd64
+
+      # buildenv needs the host build tools (bmake, the legacy and bootstrap
+      # tools) that make.py builds into /usr/obj. They come from the toolchain
+      # image's freebsd-src, not from the kernel.
+      - name: Host build tools
+        run: |
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=amd64 TARGET_ARCH=amd64 \
+            kernel-toolchain -j"$(nproc)"
 
       # nvidia-drm must be built against the same drm-kmod release the published
       # drm.ko was built from. Read DRM_KMOD_REF from the graphics repo's workflow
@@ -189,7 +201,7 @@ jobs:
           chmod +x nbkm-tools/tools/nvidia-portpatch.sh
           NVPP_DRM=1 nbkm-tools/tools/nvidia-portpatch.sh "${WRKSRC}" nvidia
 
-      - name: Build nvidia.ko + nvidia-modeset.ko against the kernel obj
+      - name: Build nvidia.ko + nvidia-modeset.ko against the kernel SDK
         run: |
           NPROC=$(nproc)
           WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
@@ -197,9 +209,9 @@ jobs:
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
             TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
-            buildenv BUILDENV_SHELL="make -C ${WRKSRC} -j${NPROC} SYSDIR=/usr/src/sys"
+            buildenv BUILDENV_SHELL="make -C ${WRKSRC} -j${NPROC} SYSDIR=${KERNEL_SDK}/sys"
 
-      - name: Build nvidia-drm.ko against the kernel obj + drm-kmod source
+      - name: Build nvidia-drm.ko against the kernel SDK + drm-kmod source
         run: |
           NPROC=$(nproc)
           WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
@@ -209,7 +221,7 @@ jobs:
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
             TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
-            buildenv BUILDENV_SHELL="env CONFTEST_BSD_KMODPATHS=/tmp/drm-ko make -C ${WRKSRC}/src/nvidia-drm -j${NPROC} SYSDIR=/usr/src/sys DRMKMODDIR=/tmp/drm-kmod/"
+            buildenv BUILDENV_SHELL="env CONFTEST_BSD_KMODPATHS=/tmp/drm-ko make -C ${WRKSRC}/src/nvidia-drm -j${NPROC} SYSDIR=${KERNEL_SDK}/sys DRMKMODDIR=/tmp/drm-kmod/"
 
       - name: Collect + gate the NVIDIA .ko output
         run: |
