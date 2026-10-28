@@ -1,9 +1,13 @@
 name: Build NextBSD NVIDIA Kernel Extensions
 on:
-  # No repository_dispatch for now (maintainer decision): nothing upstream
-  # starts this build automatically. Run it by hand (workflow_dispatch) after
-  # nextbsd-kernel-extensions-graphics publishes new graphics kexts; it links nvidia-drm
-  # against the drm.ko in the graphics-kexts-amd64.tar.gz published at that time.
+  # A chain run: nextbsd-kernel-extensions-graphics sends graphics-updated after
+  # it publishes graphics kexts built in a chain run (freebsd-src's daily sync
+  # when releng/15.1 moves, or its Sync Fork with `force`). This build links
+  # nvidia-drm against the drm.ko in the graphics-kexts-amd64.tar.gz published
+  # then. Merges elsewhere don't reach here; after one, run this by hand once
+  # the graphics kexts are republished.
+  repository_dispatch:
+    types: [graphics-updated]
   push:
     branches: [main]
     paths:
@@ -72,6 +76,7 @@ jobs:
       - name: Kernel obj tree + prepared source (same nextbsd-kernel commit)
         env:
           GH_TOKEN: ${{ github.token }}
+          DISPATCHED_SHA: ${{ github.event.client_payload.sha }}
         run: nbkm-tools/tools/prepare-kernel-src.sh amd64 amd64
 
       # nvidia-drm must be built against the same drm-kmod release the published
@@ -403,8 +408,8 @@ jobs:
           tag_name: continuous
           name: Continuous NVIDIA kexts build (amd64)
           body: |
-            Rolling NVIDIA kext build, refreshed on every successful `main` build and on
-            manual runs (after nextbsd-kernel-extensions-graphics publishes new graphics kexts).
+            Rolling NVIDIA kext build, refreshed on every successful `main` build, on chain
+            runs (graphics-updated from nextbsd-kernel-extensions-graphics) and on manual runs.
 
             `nvidia-kexts-amd64.tar.gz`: the chained NVIDIAGraphics595 / NVIDIAModeset595 /
             NVIDIACore595 kexts (with GSP firmware) plus the NVIDIA595.bundle userland,
