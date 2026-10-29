@@ -134,12 +134,12 @@ cat > "$B/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleIdentifier</key>	<string>org.nextbsd.driver.nvidia${BR}userland</string>
+	<key>CFBundleIdentifier</key>	<string>org.nextbsd.driver.NVIDIAUserland${BR}</string>
 	<key>CFBundleName</key>	<string>NVIDIA${BR}</string>
 	<key>CFBundlePackageType</key>	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>	<string>${VER}</string>
 	<key>CFBundleVersion</key>	<string>${VER}</string>
-	<key>NBSDUserlandForKext</key>	<string>org.nextbsd.driver.nvidiagraphics${BR}</string>
+	<key>NBSDUserlandForKext</key>	<string>org.nextbsd.driver.NVIDIAGraphics${BR}</string>
 </dict>
 </plist>
 PLIST

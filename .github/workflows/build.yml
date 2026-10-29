@@ -128,7 +128,16 @@ jobs:
           python3 - /tmp/gk /tmp/drm-ko <<'PY'
           import os, plistlib, shutil, sys
           src, dst = sys.argv[1], sys.argv[2]
-          want = {'org.nextbsd.kext.iographics': 'drm.ko', 'org.nextbsd.kext.dmabuf': 'dmabuf.ko'}
+          want = {'org.nextbsd.kpi.IOGraphics': 'drm.ko', 'org.nextbsd.kpi.DMABuf': 'dmabuf.ko'}
+          # The pre-D7 IDs (nextbsd/nextbsd#593). This build reads the graphics
+          # kexts published from that repo's main, so a PR here can run before
+          # the renamed graphics kexts are published; accept the old IDs on PRs
+          # only. A main build must see the D7 IDs, because NVIDIAGraphics595
+          # names org.nextbsd.kpi.IOGraphics in OSBundleLibraries and would not
+          # load against older graphics kexts. Drop this once both are published.
+          old = {'org.nextbsd.kext.iographics': 'org.nextbsd.kpi.IOGraphics',
+                 'org.nextbsd.kext.dmabuf': 'org.nextbsd.kpi.DMABuf'}
+          is_pr = os.environ.get('GITHUB_EVENT_NAME') == 'pull_request'
           found = {}
           for k in sorted(os.listdir(src)):
               p = os.path.join(src, k, 'Contents', 'Info.plist')
@@ -136,6 +145,13 @@ jobs:
                   continue
               info = plistlib.load(open(p, 'rb'))
               bid = info.get('CFBundleIdentifier')
+              if bid in old:
+                  if not is_pr:
+                      sys.exit(f"FAIL: {k} still has the pre-D7 ID {bid}; publish the renamed "
+                               f"graphics kexts first (nextbsd/nextbsd#593).")
+                  print(f"::warning::{k} has the pre-D7 ID {bid}; the published graphics kexts "
+                        f"predate nextbsd/nextbsd#593")
+                  bid = old[bid]
               if bid in want:
                   exe = os.path.join(src, k, 'Contents', 'MacOS', info['CFBundleExecutable'])
                   shutil.copy(exe, os.path.join(dst, want[bid]))
@@ -251,17 +267,17 @@ jobs:
           O=nvidia-kexts; mkdir -p "$O" pers
           "$T/gen-nvidia-personalities.sh" \
             "$WRKSRC/doc/supported-gpus/supported-gpus.json" \
-            org.nextbsd.driver.nvidiagraphics595 NVIDIAGraphics595 \
+            org.nextbsd.driver.NVIDIAGraphics595 NVIDIAGraphics595 \
             > pers/NVIDIAGraphics595.iokitpersonalities
-          "$T/ko2kext.sh" -o "$O" /tmp/nv-ko/nvidia.ko NVIDIACore595 org.nextbsd.driver.nvidiacore595
-          "$T/ko2kext.sh" -o "$O" -l org.nextbsd.driver.nvidiacore595 \
-            /tmp/nv-ko/nvidia-modeset.ko NVIDIAModeset595 org.nextbsd.driver.nvidiamodeset595
+          "$T/ko2kext.sh" -o "$O" /tmp/nv-ko/nvidia.ko NVIDIACore595 org.nextbsd.driver.NVIDIACore595
+          "$T/ko2kext.sh" -o "$O" -l org.nextbsd.driver.NVIDIACore595 \
+            /tmp/nv-ko/nvidia-modeset.ko NVIDIAModeset595 org.nextbsd.driver.NVIDIAModeset595
           "$T/ko2kext.sh" -o "$O" \
-            -l org.nextbsd.driver.nvidiamodeset595 -l org.nextbsd.kext.iographics \
+            -l org.nextbsd.driver.NVIDIAModeset595 -l org.nextbsd.kpi.IOGraphics \
             -p pers/NVIDIAGraphics595.iokitpersonalities \
             -f "$WRKSRC/firmware/gsp_tu10x/gsp_tu10x.bin" \
             -f "$WRKSRC/firmware/gsp_ga10x/gsp_ga10x.bin" \
-            /tmp/nv-ko/nvidia-drm.ko NVIDIAGraphics595 org.nextbsd.driver.nvidiagraphics595
+            /tmp/nv-ko/nvidia-drm.ko NVIDIAGraphics595 org.nextbsd.driver.NVIDIAGraphics595
           echo "=== wrapped kexts ==="
           for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d"|cut -f1))"; done
 
@@ -317,10 +333,10 @@ jobs:
           O = sys.argv[1]
           def info(n): return plistlib.load(open(f"{O}/{n}.kext/Contents/Info.plist","rb"))
           chain = {
-            'NVIDIACore595':     ('org.nextbsd.driver.nvidiacore595', []),
-            'NVIDIAModeset595':  ('org.nextbsd.driver.nvidiamodeset595', ['org.nextbsd.driver.nvidiacore595']),
-            'NVIDIAGraphics595': ('org.nextbsd.driver.nvidiagraphics595',
-                                  ['org.nextbsd.driver.nvidiamodeset595','org.nextbsd.kext.iographics']),
+            'NVIDIACore595':     ('org.nextbsd.driver.NVIDIACore595', []),
+            'NVIDIAModeset595':  ('org.nextbsd.driver.NVIDIAModeset595', ['org.nextbsd.driver.NVIDIACore595']),
+            'NVIDIAGraphics595': ('org.nextbsd.driver.NVIDIAGraphics595',
+                                  ['org.nextbsd.driver.NVIDIAModeset595','org.nextbsd.kpi.IOGraphics']),
           }
           for name,(bid,deps) in chain.items():
               d = info(name)
