@@ -38,23 +38,31 @@ same commit, so the drm-kmod headers always match the `drm.ko`. At runtime `NVID
 
 The `continuous` release carries `nvidia-kexts-amd64.tar.gz` (stable name, overwritten on each publish).
 nextbsd-pkg packages it as `NextBSD-kernel-extensions-nvidia`, amd64 only. The tarball holds only the bundles, since it
-is unpacked straight into `/System/Library/Extensions`. Each kext's `Info.plist` carries `NBSDKernelBuildID`, the
-nextbsd-kernel build it was built for (nextbsd-kernel#326). `nvidia-kexts-amd64.BUILD-INFO`, a separate asset, records
+is unpacked straight into `/System/Library/Extensions`. Each kext's `Info.plist` carries `NBSDKernelABIVersion`, the
+nextbsd-kernel ABI version it was built for (e.g. `27.0`, nextbsd-kernel#376), and the legacy `NBSDKernelBuildID`, that
+kernel's `KERNEL-BUILD-ID` (nextbsd-kernel#326). `nvidia-kexts-amd64.BUILD-INFO`, a separate asset, records
 the NVIDIA version and the kernel, graphics and drm-kmod builds it was made against.
 
-## Kernel SDK and build ID
+## Kernel SDK and ABI version
 
 `tools/fetch-kernel-sdk.sh` downloads the kernel SDK, `kernel-sdk-amd64.tar.gz` (nextbsd-kernel#327): the kernel's headers,
-generated options and `KERNEL-BUILD-ID`. The NVIDIA modules build with `SYSDIR` pointing into it, with no kernel source
-or obj tree and no kernel relink. The build fails if the published graphics kexts carry a different `NBSDKernelBuildID` than that kernel: rebuild the graphics
-kexts first.
+generated options, `KERNEL-BUILD-ID` and its `KERNEL-VERSION` and `KERNEL-ABI-VERSION` (nextbsd-kernel#376; an older SDK
+has neither, and its `KERNEL-BUILD-ID` stands in for both). The NVIDIA modules build with `SYSDIR` pointing into it, with
+no kernel source or obj tree and no kernel relink. `tools/stamp-kernel-abi.py` writes `NBSDKernelABIVersion` and
+`NBSDKernelBuildID` into each kext. The build fails if the published graphics kexts carry a different
+`NBSDKernelABIVersion` or `NBSDKernelBuildID` than that kernel: rebuild the graphics kexts first.
+
+NextBSD reports `__FreeBSD_version` 2700000 while keeping the releng/15.1 kernel API (nextbsd-kernel#376). The 595.84
+sources, after the port patches and `tools/nvidia-portpatch.sh`, have no gate that picks a FreeBSD 16 path at 2700000:
+the only `>= 1600000` gate is the port's "FreeBSD-CURRENT" `#error` in `nv-freebsd.h`, which `nvidia-portpatch.sh`
+already deletes, and every other gate takes the same branch at 1501000 and 2700000. Re-check on a driver bump.
 
 ## Tools
 
 `tools/` holds the scripts this build uses, copied from nextbsd-kernel-extensions-graphics when the NVIDIA build moved here:
 `ko2kext.sh`, `gen-nvidia-personalities.sh`, `nvidia-portpatch.sh`, `nvidia-mkbundle.sh` and `nvidia-activate.sh`.
 `nvidia-mkbundle.sh` and `nvidia-activate.sh` are at `04b714a` (nextbsd-kernel-extensions-graphics#98); the rest at `a35dc83`.
-`fetch-kernel-sdk.sh` and `stamp-kernel-build-id.py` are shared with nextbsd-kernel-extensions and -graphics.
+`fetch-kernel-sdk.sh` and `stamp-kernel-abi.py` are shared with nextbsd-kernel-extensions and -graphics.
 
 `patches/freebsd-ports/` holds the FreeBSD port's driver patches, pinned to one ports commit (see its README).
 
