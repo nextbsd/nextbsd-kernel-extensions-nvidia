@@ -72,10 +72,13 @@ jobs:
           path: nbkm-tools
 
       # The kernel SDK from nextbsd-kernel's `continuous` release
-      # (nextbsd-kernel#327): the kernel's headers, generated options and
-      # KERNEL-BUILD-ID. No kernel source or obj tree, no relink
-      # (nextbsd-kernel-extensions#2). Exports KERNEL_SDK, KERNEL_COMMIT and
-      # KERNEL_BUILD_ID; the module builds below use SYSDIR=$KERNEL_SDK/sys.
+      # (nextbsd-kernel#327): the kernel's headers, generated options,
+      # KERNEL-BUILD-ID and kernel/kext ABI versions (nextbsd-kernel#376; the
+      # build ID stands in for both on an older SDK). No kernel source or obj
+      # tree, no relink (nextbsd-kernel-extensions#2). Exports KERNEL_SDK,
+      # KERNEL_COMMIT (from the SDK's SDK-INFO), KERNEL_BUILD_ID,
+      # KERNEL_ABI_VERSION and KERNEL_VERSION; the module builds below use
+      # SYSDIR=$KERNEL_SDK/sys.
       - name: Kernel SDK
         env:
           GH_TOKEN: ${{ github.token }}
@@ -161,12 +164,25 @@ jobs:
           if missing:
               sys.exit(f"FAIL: graphics kexts lack {missing}")
           # nvidia-drm links against this drm.ko, so the graphics kexts must have
-          # been built for the same kernel build as the kernel-obj we build
-          # against (nextbsd-kernel#326). A mismatch means the graphics repo
-          # hasn't been rebuilt since the kernel changed: rebuild it first.
+          # been built for the same kernel as the SDK we build against: the same
+          # kernel ABI version (NBSDKernelABIVersion, nextbsd-kernel#376) when
+          # they carry one, and the same legacy NBSDKernelBuildID
+          # (nextbsd-kernel#326), which packaging also compares. A mismatch means
+          # the graphics repo hasn't been rebuilt since the kernel changed:
+          # rebuild it first.
           kid = os.environ['KERNEL_BUILD_ID']
+          kabi = os.environ['KERNEL_ABI_VERSION']
           for bid, k in sorted(found.items()):
               info = plistlib.load(open(os.path.join(src, k, 'Contents', 'Info.plist'), 'rb'))
+              gabi = info.get('NBSDKernelABIVersion')
+              if gabi is None:
+                  # Graphics kexts published before nextbsd-kernel#376 step 3.
+                  print(f"{k}: no NBSDKernelABIVersion; checking NBSDKernelBuildID only")
+              elif gabi != kabi:
+                  sys.exit(f"FAIL: {k} was built for kernel ABI {gabi}, but the kernel SDK is ABI {kabi}. "
+                           f"Rebuild {os.environ['GRAPHICS_REPO']} against the current kernel first.")
+              else:
+                  print(f"{k}: NBSDKernelABIVersion {gabi} matches the kernel SDK")
               gid = info.get('NBSDKernelBuildID')
               if gid is None:
                   # Graphics kexts published before nextbsd-kernel-extensions-graphics#100.
@@ -354,11 +370,12 @@ jobs:
           print("NVIDIA kext bundles OK (chain + personalities + firmware)")
           PY
 
-      # Every kext records the kernel build it was compiled for, in its own
-      # Info.plist (NBSDKernelBuildID), so the ID travels with the bundle into
-      # /System/Library/Extensions (nextbsd-kernel#326).
-      - name: Stamp KERNEL-BUILD-ID into the NVIDIA kexts
-        run: python3 nbkm-tools/tools/stamp-kernel-build-id.py "$KERNEL_BUILD_ID" nvidia-kexts
+      # Every kext records the kernel ABI it was compiled for, in its own
+      # Info.plist (NBSDKernelABIVersion, nextbsd-kernel#376), plus the legacy
+      # NBSDKernelBuildID (nextbsd-kernel#326), so both travel with the bundle
+      # into /System/Library/Extensions.
+      - name: Stamp the kernel ABI version into the NVIDIA kexts
+        run: python3 nbkm-tools/tools/stamp-kernel-abi.py "$KERNEL_ABI_VERSION" "$KERNEL_BUILD_ID" nvidia-kexts
 
       # OSBundleRequired by role, as Mac OS X 10.9 tags its kexts
       # (nextbsd-kernel-extensions#4): the NVIDIA kexts are Safe Boot, like
@@ -375,6 +392,8 @@ jobs:
           cat > build-info/BUILD-INFO <<EOF
           nvidia_version=${NVIDIA_DISTVERSION}
           kernel_commit=${KERNEL_COMMIT}
+          kernel_version=${KERNEL_VERSION}
+          kernel_abi_version=${KERNEL_ABI_VERSION}
           kernel_build_id=${KERNEL_BUILD_ID}
           graphics_repo=${GRAPHICS_REPO}
           graphics_commit=${GRAPHICS_COMMIT}
@@ -450,7 +469,8 @@ jobs:
             `nvidia-kexts-amd64.tar.gz`: the chained NVIDIAGraphics595 / NVIDIAModeset595 /
             NVIDIACore595 kexts (with GSP firmware) plus the NVIDIA595.bundle userland,
             installed into /System/Library/Extensions. amd64 only. Each kext's
-            Info.plist carries NBSDKernelBuildID, the kernel build it was built for.
+            Info.plist carries NBSDKernelABIVersion, the kernel ABI version it was
+            built for, and the legacy NBSDKernelBuildID, that kernel's build ID.
             `nvidia-kexts-amd64.BUILD-INFO`: what this build was built against.
 
             Built against:
